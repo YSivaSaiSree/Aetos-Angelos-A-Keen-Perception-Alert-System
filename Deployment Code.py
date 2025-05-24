@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[ ]:
-
-
 import cv2
 import mediapipe as mp
 import torch
@@ -15,7 +9,6 @@ from datetime import datetime
 import json
 import sqlite3
 import numpy as np
-
 
 # Initialize MediaPipe Hands module
 mp_hands = mp.solutions.hands
@@ -39,7 +32,6 @@ num_ftrs = model.fc.in_features
 model.fc = torch.nn.Linear(num_ftrs, 4)  # Change the final layer to match the number of gesture classes
 model.load_state_dict(torch.load('C:/Users/91630/Downloads/2resnet_model.pth', map_location=torch.device('cpu')))
 model.eval()
-
 
 # Database setup
 def initialize_db(db_path='gesture_images.db'):
@@ -65,14 +57,15 @@ def insert_image_to_db(gesture_label, image, timestamp):
 initialize_db()
 
 
-# Define the output text and service type for each gesture label
-gestures = {
+# Define the output text for each gesture label
+output_texts = {
     0: ('No Gesture Detected', 'None'),
     1: ('Gesture 100 Detected', 'Police'),
     2: ('Gesture 108 Detected', 'Ambulance'),
     3: ('Gesture 112 Detected', 'Emergency')
 }
 
+# Elastic Email API credentials
 elastic_email_api_key = '41E26C631CB2D39A01355246745E0C2E033CBFCBD5D5A599644A36FEB523D56976DEB5CB816FB5C7A77B20A04A880862'
 elastic_email_sender = 'sivasaisreeyakkala@gmail.com'
 recipient_email = '22215a7202@bvrit.ac.in'
@@ -81,53 +74,73 @@ recipient_email = '22215a7202@bvrit.ac.in'
 access_token = '589bee26e1b9b4'
 handler = ipinfo.getHandler(access_token)
 
-# Start capturing video from the webcam
+# Start capturing video from the webcam or IP camera
 cap = cv2.VideoCapture(0)
+address = "http://10.250.75.169:8080/video"
+cap.open(address)
 
 while cap.isOpened():
     success, image = cap.read()
     if not success:
-        continue
+        continue  # Skip the rest of the code in this iteration if frame read was unsuccessful
 
+    # Convert the image color from BGR to RGB
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Process the image and detect hands
     results = hands.process(image_rgb)
 
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
+            # Calculate the bounding box directly from the landmarks
             x_min = min([lm.x for lm in hand_landmarks.landmark]) * image.shape[1]
             x_max = max([lm.x for lm in hand_landmarks.landmark]) * image.shape[1]
             y_min = min([lm.y for lm in hand_landmarks.landmark]) * image.shape[0]
             y_max = max([lm.y for lm in hand_landmarks.landmark]) * image.shape[0]
 
-            padding = 20
+            # Increase the padding around the hand
+            padding = 20  # Adjust this value to increase or decrease the padding
             x_min = max(x_min - padding, 0)
             x_max = min(x_max + padding, image.shape[1])
             y_min = max(y_min - padding, 0)
             y_max = min(y_max + padding, image.shape[0])
 
+            # Crop the hand region with increased padding
             hand_region = image[int(y_min):int(y_max), int(x_min):int(x_max)]
             if hand_region.size == 0:
-                continue
+                continue  # Skip this hand if the region is empty
 
+            # Convert the cropped hand region to PIL Image and apply transforms
             pil_image = Image.fromarray(cv2.cvtColor(hand_region, cv2.COLOR_BGR2RGB))
             preprocessed_image = transform(pil_image).unsqueeze(0)
 
+            # Perform gesture recognition
             with torch.no_grad():
                 outputs = model(preprocessed_image)
                 _, predicted = torch.max(outputs, 1)
                 gesture_label = predicted.item()
 
-            output_text, service_type = gestures.get(gesture_label, ('Unknown Gesture', 'None'))
+            # Get gesture text
+            output_text,service_type = output_texts.get(gesture_label, ('Unknown Gesture','None'))
+
+            # Draw bounding box and text
             cv2.rectangle(image, (int(x_min), int(y_min)), (int(x_max), int(y_max)), (0, 255, 0), 2)
             cv2.putText(image, output_text, (int(x_min), int(y_min)-10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
+            
+
+    # Show the image with annotations
     cv2.imshow('Live Gesture Detection', image)
 
+
+    # Check for key press 'c' to send email
     key = cv2.waitKey(1) & 0xFF
     if key == ord('c'):
         ip_address = requests.get('https://api.ipify.org').text
         details = handler.getDetails(ip_address)
-        latitude, longitude = details.loc.split(',')
+        location = details.loc.split(',')
+        latitude = location[0]
+        longitude = location[1]
 
 
         subject = 'Gesture Detected'
@@ -162,9 +175,11 @@ while cap.isOpened():
         with open('latest_gesture_data.json', 'w') as f:
             json.dump(data1, f)
 
+        
+
+    # Exit the loop when 'q' key is pressed
     if key == ord('q'):
         break
 
 cap.release()
 cv2.destroyAllWindows()
-
